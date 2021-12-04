@@ -1,0 +1,82 @@
+#!/bin/sh -eu
+# Copyright 2021 Raffaello D. Di Napoli
+# Distributed under the terms of the GNU General Public License v2
+# -*- coding: utf-8; mode: sh; tab-width: 3; indent-tabs-mode: nil -*-
+
+srcdir=
+dstdir="${0%/*}/files"
+
+while [ ${#} -gt 0 ]; do
+   case "${1}" in
+   (--srcdir)
+      shift
+      case "${1:-}" in
+      (''|-*)
+         echo "Source directory expected, or empty string to fetch from Khadas git"
+         exit 1
+         ;;
+      esac
+      srcdir="${1}"
+      shift
+      ;;
+   (--dstdir)
+      shift
+      case "${1:-}" in
+      (''|-*)
+         echo "Destination directory expected"
+         exit 1
+         ;;
+      esac
+      dstdir="${1}"
+      shift
+      ;;
+   (--help|-h)
+      echo "This script refreshes the contents of sys-kernel/khadas-sources/files from the latest \
+contents of Khadas’ GitHub Fenix repo."
+      echo "Usage: ${0##*/} [--srcdir SRC_DIR] [--dstdir DST_DIR]"
+      echo "SRC_DIR, if specified, should be the root of a clone of the Fenix repo; defaults to a \
+newly-downloaded flat clone of the repo, which is then deleted at the end of this script."
+      echo "DST_DIR, if specified, can be any directory; defaults to the files/ subdirectory of \
+wherever this script is located."
+      exit 0
+      ;;
+   (*)
+      echo "Invalid option: ${1}"
+      exit 1
+      ;;
+   esac
+done
+# Make paths absolute.
+[ "${srcdir#/}" != "${srcdir}" ] || srcdir="${PWD}/${srcdir}"
+[ "${dstdir#/}" != "${dstdir}" ] || dstdir="${PWD}/${dstdir}"
+
+delete_srcdir_on_exit=false
+
+cleanup() {
+   set +e
+   ${delete_srcdir_on_exit} && rm -rf "${srcdir}"
+}
+
+trap cleanup EXIT
+
+if [ -z "${srcdir}" ]; then
+   srcdir=$(mktemp -d -p "${TMPDIR:-/tmp}" khadas_fenix.XXXXXX)
+   delete_srcdir_on_exit=true
+   git clone --depth 1 https://github.com/khadas/fenix "${srcdir}"
+fi
+
+for verdir in "${srcdir}/packages/linux-mainline/patches/"*; do
+   [ -d "${verdir}" ] || continue
+   ver="${verdir##*/}"
+   echo "Creating patches tarball for version ${ver}"
+   (cd "${verdir}" && tar -chv *.patch) |
+   xz >"${dstdir}/khadas_patches-${ver}.tar.xz"
+done
+
+for config in "${srcdir}/packages/linux-mainline/configs/"*.config; do
+   [ -f "${config}" ] || continue
+   board="${config##*/}"
+   board="${board%.config}"
+   echo "Copying config for board ${board}"
+   xz <"${config}" >"${dstdir}/khadas_$(echo ${board} | tr '[:upper:]' '[:lower:]').config.xz"
+done
